@@ -1,4 +1,4 @@
-use std::{borrow::Cow, env, fs, sync::Arc};
+use std::{borrow::Cow, env, fs, path::{Path, PathBuf}, sync::Arc};
 
 use neutrino_bridge::exports::neutrino::core::ipc::{Request, Response};
 use serde::{Deserialize, Serialize};
@@ -45,7 +45,7 @@ struct ComponentRuntime {
 }
 
 impl ComponentRuntime {
-    fn new(engine: &Engine, component_path: &str) -> Result<Self, String> {
+    fn new(engine: &Engine, component_path: impl AsRef<Path>) -> Result<Self, String> {
         let component = Component::from_file(engine, component_path)
             .map_err(|error| error.to_string())?;
         Ok(Self {
@@ -84,9 +84,34 @@ impl ComponentRuntime {
     }
 }
 
+fn resource_dir() -> PathBuf {
+    if let Ok(path) = env::var("NEUTRINO_RESOURCE_DIR") {
+        return PathBuf::from(path);
+    }
+    if let Ok(executable) = env::current_exe() {
+        if let Some(contents) = executable.parent().and_then(Path::parent) {
+            let resources = contents.join("Resources");
+            if resources.is_dir() {
+                return resources;
+            }
+        }
+    }
+    env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let component_path = env::var("NEUTRINO_COMPONENT")
-        .unwrap_or_else(|_| "target/wasm32-wasip2/release/neutrino_core.wasm".to_owned());
+    let resources = resource_dir();
+    let component_path = env::var_os("NEUTRINO_COMPONENT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let bundled = resources.join("neutrino_core.wasm");
+            if bundled.is_file() {
+                bundled
+            } else {
+                PathBuf::from("target/wasm32-wasip2/release/neutrino_core.wasm")
+            }
+        });
+    let ui_dir = resources.join("ui");
     let mut config = Config::new();
     config.wasm_component_model(true);
     let engine = Arc::new(Engine::new(&config)?);
@@ -96,6 +121,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_title("Neutrino")
         .build(&event_loop)?;
     let web_runtime = Arc::clone(&runtime);
+    let web_ui_dir = ui_dir.clone();
 
     let _webview = WebViewBuilder::new()
         .with_custom_protocol("app".into(), move |_, request| {
@@ -103,13 +129,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if path == "/" || path == "/index.html" {
                 return HttpResponse::builder()
                     .header("Content-Type", "text/html; charset=utf-8")
-                    .body(Cow::Owned(fs::read("ui/index.html").unwrap_or_default()))
+                    .body(Cow::Owned(fs::read(web_ui_dir.join("index.html")).unwrap_or_default()))
                     .unwrap();
             }
             if path == "/main.js" {
                 return HttpResponse::builder()
                     .header("Content-Type", "text/javascript; charset=utf-8")
-                    .body(Cow::Owned(fs::read("ui/main.js").unwrap_or_default()))
+                    .body(Cow::Owned(fs::read(web_ui_dir.join("main.js")).unwrap_or_default()))
                     .unwrap();
             }
             if path == "/invoke" {
