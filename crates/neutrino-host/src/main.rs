@@ -39,38 +39,49 @@ impl WasiView for HostState {
     }
 }
 
-fn invoke_component(
-    engine: &Engine,
-    component_path: &str,
-    request: Request,
-) -> Result<Response, String> {
-    let component = Component::from_file(engine, component_path).map_err(|error| error.to_string())?;
-    let mut linker = wasmtime::component::Linker::<HostState>::new(engine);
-    p2::add_to_linker_sync(&mut linker).map_err(|error| error.to_string())?;
-    let wasi = WasiCtxBuilder::new().inherit_stdio().build();
-    let mut store = Store::new(
-        engine,
-        HostState {
-            wasi,
-            table: ResourceTable::new(),
-        },
-    );
-    let instance = linker
-        .instantiate(&mut store, &component)
-        .map_err(|error| error.to_string())?;
-    let ipc = instance
-        .get_export_index(&mut store, None, "neutrino:core/ipc@0.1.0")
-        .ok_or_else(|| "missing neutrino:core/ipc@0.1.0 export".to_owned())?;
-    let invoke_export = instance
-        .get_export_index(&mut store, Some(&ipc), "invoke")
-        .ok_or_else(|| "missing invoke export in neutrino:core/ipc@0.1.0".to_owned())?;
-    let invoke = instance
-        .get_typed_func::<(Request,), (Response,)>(&mut store, invoke_export)
-        .map_err(|error| error.to_string())?;
-    invoke
-        .call(&mut store, (request,))
-        .map(|result| result.0)
-        .map_err(|error| error.to_string())
+struct ComponentRuntime {
+    engine: Engine,
+    component: Component,
+}
+
+impl ComponentRuntime {
+    fn new(engine: &Engine, component_path: &str) -> Result<Self, String> {
+        let component = Component::from_file(engine, component_path)
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            engine: engine.clone(),
+            component,
+        })
+    }
+
+    fn invoke(&self, request: Request) -> Result<Response, String> {
+        let mut linker = wasmtime::component::Linker::<HostState>::new(&self.engine);
+        p2::add_to_linker_sync(&mut linker).map_err(|error| error.to_string())?;
+        let wasi = WasiCtxBuilder::new().inherit_stdio().build();
+        let mut store = Store::new(
+            &self.engine,
+            HostState {
+                wasi,
+                table: ResourceTable::new(),
+            },
+        );
+        let instance = linker
+            .instantiate(&mut store, &self.component)
+            .map_err(|error| error.to_string())?;
+        let ipc = instance
+            .get_export_index(&mut store, None, "neutrino:core/ipc@0.1.0")
+            .ok_or_else(|| "missing neutrino:core/ipc@0.1.0 export".to_owned())?;
+        let invoke_export = instance
+            .get_export_index(&mut store, Some(&ipc), "invoke")
+            .ok_or_else(|| "missing invoke export in neutrino:core/ipc@0.1.0".to_owned())?;
+        let invoke = instance
+            .get_typed_func::<(Request,), (Response,)>(&mut store, invoke_export)
+            .map_err(|error| error.to_string())?;
+        invoke
+            .call(&mut store, (request,))
+            .map(|result| result.0)
+            .map_err(|error| error.to_string())
+    }
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -79,12 +90,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config.wasm_component_model(true);
     let engine = Arc::new(Engine::new(&config)?);
+    let runtime = Arc::new(ComponentRuntime::new(&engine, &component_path)?);
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new()
         .with_title("Neutrino")
         .build(&event_loop)?;
-    let web_engine = Arc::clone(&engine);
-    let web_component_path = component_path.clone();
+    let web_runtime = Arc::clone(&runtime);
 
     let _webview = WebViewBuilder::new()
         .with_custom_protocol("app".into(), move |_, request| {
@@ -106,14 +117,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let result = input
                     .map_err(|error| error.to_string())
                     .and_then(|input| {
-                        invoke_component(
-                            &web_engine,
-                            &web_component_path,
-                            Request {
+                        web_runtime
+                            .invoke(Request {
                                 action: input.action,
                                 payload: input.payload,
-                            },
-                        )
+                            })
                     });
                 let body = match result {
                     Ok(Response { status, body, error }) => serde_json::to_vec(&UiResponse { status, body, error })
