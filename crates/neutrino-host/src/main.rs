@@ -58,8 +58,14 @@ fn invoke_component(
     let instance = linker
         .instantiate(&mut store, &component)
         .map_err(|error| error.to_string())?;
+    let ipc = instance
+        .get_export_index(&mut store, None, "neutrino:core/ipc@0.1.0")
+        .ok_or_else(|| "missing neutrino:core/ipc@0.1.0 export".to_owned())?;
+    let invoke_export = instance
+        .get_export_index(&mut store, Some(&ipc), "invoke")
+        .ok_or_else(|| "missing invoke export in neutrino:core/ipc@0.1.0".to_owned())?;
     let invoke = instance
-        .get_typed_func::<(Request,), (Response,)>(&mut store, "neutrino:core/ipc#invoke")
+        .get_typed_func::<(Request,), (Response,)>(&mut store, invoke_export)
         .map_err(|error| error.to_string())?;
     invoke
         .call(&mut store, (request,))
