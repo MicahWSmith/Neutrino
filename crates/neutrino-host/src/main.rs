@@ -1,0 +1,145 @@
+use std::{borrow::Cow, env, fs, sync::Arc};
+
+use neutrino_bridge::exports::neutrino::core::ipc::{Request, Response};
+use serde::{Deserialize, Serialize};
+use tao::{
+    event::{Event, WindowEvent},
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+};
+use wasmtime::{component::Component, Config, Engine, Store};
+use wasmtime_wasi::{p2, ResourceTable, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
+use wry::{http::Response as HttpResponse, WebViewBuilder};
+
+#[derive(Deserialize)]
+struct UiRequest {
+    action: String,
+    #[serde(default)]
+    payload: String,
+}
+
+#[derive(Serialize)]
+struct UiResponse {
+    status: u16,
+    body: String,
+    error: Option<String>,
+}
+
+struct HostState {
+    wasi: WasiCtx,
+    table: ResourceTable,
+}
+
+impl WasiView for HostState {
+    fn ctx(&mut self) -> WasiCtxView<'_> {
+        WasiCtxView {
+            ctx: &mut self.wasi,
+            table: &mut self.table,
+        }
+    }
+}
+
+fn invoke_component(
+    engine: &Engine,
+    component_path: &str,
+    request: Request,
+) -> Result<Response, String> {
+    let component = Component::from_file(engine, component_path).map_err(|error| error.to_string())?;
+    let mut linker = wasmtime::component::Linker::<HostState>::new(engine);
+    p2::add_to_linker_sync(&mut linker).map_err(|error| error.to_string())?;
+    let wasi = WasiCtxBuilder::new().inherit_stdio().build();
+    let mut store = Store::new(
+        engine,
+        HostState {
+            wasi,
+            table: ResourceTable::new(),
+        },
+    );
+    let instance = linker
+        .instantiate(&mut store, &component)
+        .map_err(|error| error.to_string())?;
+    let invoke = instance
+        .get_typed_func::<(Request,), (Response,)>(&mut store, "neutrino:core/ipc#invoke")
+        .map_err(|error| error.to_string())?;
+    invoke
+        .call(&mut store, (request,))
+        .map(|result| result.0)
+        .map_err(|error| error.to_string())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let component_path = env::var("NEUTRINO_COMPONENT")
+        .unwrap_or_else(|_| "target/wasm32-wasip2/release/neutrino_core.wasm".to_owned());
+    let mut config = Config::new();
+    config.wasm_component_model(true);
+    let engine = Arc::new(Engine::new(&config)?);
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("Neutrino")
+        .build(&event_loop)?;
+    let web_engine = Arc::clone(&engine);
+    let web_component_path = component_path.clone();
+
+    let _webview = WebViewBuilder::new()
+        .with_custom_protocol("app".into(), move |_, request| {
+            let path = request.uri().path();
+            if path == "/" || path == "/index.html" {
+                return HttpResponse::builder()
+                    .header("Content-Type", "text/html; charset=utf-8")
+                    .body(Cow::Owned(fs::read("ui/index.html").unwrap_or_default()))
+                    .unwrap();
+            }
+            if path == "/main.js" {
+                return HttpResponse::builder()
+                    .header("Content-Type", "text/javascript; charset=utf-8")
+                    .body(Cow::Owned(fs::read("ui/main.js").unwrap_or_default()))
+                    .unwrap();
+            }
+            if path == "/invoke" {
+                let input: Result<UiRequest, _> = serde_json::from_slice(request.body());
+                let result = input
+                    .map_err(|error| error.to_string())
+                    .and_then(|input| {
+                        invoke_component(
+                            &web_engine,
+                            &web_component_path,
+                            Request {
+                                action: input.action,
+                                payload: input.payload,
+                            },
+                        )
+                    });
+                let body = match result {
+                    Ok(Response { status, body, error }) => serde_json::to_vec(&UiResponse { status, body, error })
+                        .unwrap_or_else(|_| b"{\"status\":500}".to_vec()),
+                    Err(error) => serde_json::to_vec(&UiResponse {
+                        status: 500,
+                        body: String::new(),
+                        error: Some(error),
+                    })
+                    .unwrap(),
+                };
+                return HttpResponse::builder()
+                    .header("Content-Type", "application/json")
+                    .body(Cow::Owned(body))
+                    .unwrap();
+            }
+            HttpResponse::builder()
+                .status(404)
+                .body(Cow::Owned(Vec::new()))
+                .unwrap()
+        })
+        .with_url("app://localhost/index.html")
+        .build(&window)?;
+
+    event_loop.run(move |event, _, control_flow| {
+        *control_flow = ControlFlow::Wait;
+        if let Event::WindowEvent {
+            event: WindowEvent::CloseRequested,
+            ..
+        } = event
+        {
+            *control_flow = ControlFlow::Exit;
+        }
+    });
+}

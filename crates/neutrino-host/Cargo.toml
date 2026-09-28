@@ -1,0 +1,17 @@
+[package]
+name = "neutrino-host"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "neutrino"
+path = "src/main.rs"
+
+[dependencies]
+neutrino-bridge = { path = "../neutrino-bridge" }
+serde.workspace = true
+serde_json.workspace = true
+tao = "0.29"
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+wry = { workspace = true, features = ["protocol", "os-webview"] }

@@ -1,0 +1,20 @@
+package neutrino:core@0.1.0;
+
+interface ipc {
+  record request {
+    action: string,
+    payload: string,
+  }
+
+  record response {
+    status: u16,
+    body: string,
+    error: option<string>,
+  }
+
+  invoke: func(req: request) -> response;
+}
+
+world engine {
+  export ipc;
+}
