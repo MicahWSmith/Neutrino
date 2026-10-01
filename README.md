@@ -58,6 +58,35 @@ NEUTRINO_COMPONENT="$PWD/target/wasm32-wasip2/release/neutrino_core.wasm" \
 	cargo run -p neutrino-host
 ```
 
+On Windows (PowerShell), with [Rust](https://rustup.rs) and the [MSVC Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) installed:
+
+```powershell
+rustup target add wasm32-wasip2
+cargo build -p neutrino-core --target wasm32-wasip2 --release
+$env:NEUTRINO_COMPONENT = "$PWD\target\wasm32-wasip2\release\neutrino_core.wasm"
+cargo run -p neutrino-host
+```
+
+Windows ships WebView2 with modern Windows 10/11, so no separate browser runtime install is needed.
+
+## Packaging
+
+### macOS
+
+```sh
+./scripts/package-macos.sh
+```
+
+This builds a `Neutrino.app` bundle under `target/Neutrino.app`, ad-hoc signs it, and prints the path to open it with.
+
+### Windows
+
+```powershell
+.\scripts\package-windows.ps1
+```
+
+This builds a relocatable app folder under `target\Neutrino\` containing `neutrino.exe` and a `Resources\` folder with the UI assets and the `neutrino_core.wasm` component. Copy the whole `target\Neutrino\` folder anywhere and run `neutrino.exe` to launch it.
+
 ## Lightweight Runtime
 
 The current macOS proof of concept produces an 18.68 MB native host binary and a 73.42 KiB backend component.

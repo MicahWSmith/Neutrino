@@ -89,6 +89,14 @@ fn resource_dir() -> PathBuf {
         return PathBuf::from(path);
     }
     if let Ok(executable) = env::current_exe() {
+        // Flat layout (Windows packaging): neutrino.exe next to a Resources folder.
+        if let Some(exe_dir) = executable.parent() {
+            let resources = exe_dir.join("Resources");
+            if resources.is_dir() {
+                return resources;
+            }
+        }
+        // macOS app bundle layout: Contents/MacOS/neutrino -> Contents/Resources.
         if let Some(contents) = executable.parent().and_then(Path::parent) {
             let resources = contents.join("Resources");
             if resources.is_dir() {
