@@ -15,3 +15,6 @@ tao = "0.29"
 wasmtime.workspace = true
 wasmtime-wasi.workspace = true
 wry = { workspace = true, features = ["protocol", "os-webview"] }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_Console"] }

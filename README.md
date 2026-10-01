@@ -74,18 +74,26 @@ Windows ships WebView2 with modern Windows 10/11, so no separate browser runtime
 ### macOS
 
 ```sh
-./scripts/package-macos.sh
+./scripts/package-macos.sh /path/to/your/ui
 ```
 
-This builds a `Neutrino.app` bundle under `target/Neutrino.app`, ad-hoc signs it, and prints the path to open it with.
+This builds a `Neutrino.app` bundle under `target/Neutrino.app`, ad-hoc signs it, and prints the path to open it with. `/path/to/your/ui` is your app's own UI folder (HTML/CSS/JS) — Neutrino doesn't ship or assume one.
 
 ### Windows
 
 ```powershell
-.\scripts\package-windows.ps1
+.\scripts\package-windows.ps1 -Name MyApp -UiDir C:\path\to\your\ui
 ```
 
-This builds a relocatable app folder under `target\Neutrino\` containing `neutrino.exe` and a `Resources\` folder with the UI assets and the `neutrino_core.wasm` component. Copy the whole `target\Neutrino\` folder anywhere and run `neutrino.exe` to launch it.
+This builds a relocatable app folder under `target\MyApp\` containing `MyApp.exe` and a `Resources\` folder with your UI assets and the `neutrino_core.wasm` component. Copy the whole `target\MyApp\` folder anywhere and run `MyApp.exe` to launch it.
+
+`neutrino.exe` itself can also trigger this packaging step directly from the command line:
+
+```powershell
+neutrino.exe build C:\path\to\project MyApp C:\path\to\your\ui
+```
+
+This runs that project's own `scripts\package-windows.ps1`, so `<project>` must be a Neutrino project root (containing its own `scripts/` folder), such as this repository. The app name and UI folder are both required: the app name becomes the output folder and executable name (`target\MyApp\MyApp.exe`), and the UI folder is copied in as-is — Neutrino has no bundled UI of its own. Only supported when `neutrino.exe` is run on Windows.
 
 ## Lightweight Runtime
 

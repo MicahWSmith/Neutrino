@@ -1,4 +1,8 @@
-use std::{borrow::Cow, env, fs, path::{Path, PathBuf}, sync::Arc};
+// GUI-only in release builds: no console window when double-clicked. Debug builds keep the
+// console so `cargo run` output is visible.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+use std::{borrow::Cow, env, fs, path::{Path, PathBuf}, process::Command, sync::Arc};
 
 use neutrino_bridge::exports::neutrino::core::ipc::{Request, Response};
 use serde::{Deserialize, Serialize};
@@ -107,7 +111,70 @@ fn resource_dir() -> PathBuf {
     env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+// `neutrino.exe build <project-dir> <app-name> <ui-dir>` packages a Windows app by running that
+// project's own scripts/package-windows.ps1 instead of launching the webview.
+fn run_windows_build(project_dir: &Path, app_name: &str, ui_dir: &Path) -> i32 {
+    if !cfg!(target_os = "windows") {
+        eprintln!("build is only supported when neutrino is run on Windows");
+        return 1;
+    }
+    if !project_dir.is_dir() {
+        eprintln!("{} is not a directory", project_dir.display());
+        return 1;
+    }
+    if !ui_dir.is_dir() {
+        eprintln!("{} is not a directory", ui_dir.display());
+        return 1;
+    }
+    let script = project_dir.join("scripts").join("package-windows.ps1");
+    if !script.is_file() {
+        eprintln!("{} not found; is this a Neutrino project root?", script.display());
+        return 1;
+    }
+    let status = Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .args(["-Name", app_name])
+        .args(["-UiDir"])
+        .arg(ui_dir)
+        .current_dir(project_dir)
+        .status();
+    match status {
+        Ok(status) => status.code().unwrap_or(1),
+        Err(error) => {
+            eprintln!("failed to run {}: {error}", script.display());
+            1
+        }
+    }
+}
+
+// Re-attaches to the launching terminal's console (if any) so output from a GUI-subsystem
+// build is still visible when run from a shell, e.g. for the `build` subcommand.
+#[cfg(windows)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{AttachConsole, ATTACH_PARENT_PROCESS};
+    unsafe {
+        AttachConsole(ATTACH_PARENT_PROCESS);
+    }
+}
+
+#[cfg(not(windows))]
+fn attach_parent_console() {}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    attach_parent_console();
+    let args: Vec<String> = env::args().collect();
+    if let Some(index) = args.iter().position(|arg| arg == "build") {
+        let project_dir = args.get(index + 1);
+        let app_name = args.get(index + 2);
+        let ui_dir = args.get(index + 3);
+        let (Some(project_dir), Some(app_name), Some(ui_dir)) = (project_dir, app_name, ui_dir) else {
+            eprintln!("usage: neutrino build <project-dir> <app-name> <ui-dir>");
+            std::process::exit(1);
+        };
+        std::process::exit(run_windows_build(Path::new(project_dir), app_name, Path::new(ui_dir)));
+    }
+
     let resources = resource_dir();
     let component_path = env::var_os("NEUTRINO_COMPONENT")
         .map(PathBuf::from)
